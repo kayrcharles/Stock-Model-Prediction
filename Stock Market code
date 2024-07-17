@@ -1,0 +1,284 @@
+# import the important libraries
+import numpy as np
+import matplotlib.pyplot as plt # graph
+import torch # PyTorch
+import torch.nn as nn # layers
+import torch.optim as optim # optimizer
+import torchvision
+import torch.nn.functional as F
+import torchvision.transforms as transforms # transforming data
+import yfinance as y # for stock market data
+import pandas as pd # data analyzing
+from sklearn.preprocessing import MinMaxScaler # data, scaling the data within a range
+import math # for math in data
+from torch.utils.data import DataLoader, TensorDataset # data
+from datetime import datetime # for dates
+
+# Download the data
+data = y.download('GOOG', start='2016-01-01', end='2022-12-31')
+
+# Plot the close price
+plt.figure(figsize=(16,8))
+plt.plot(data['Close'], color='black')
+plt.xlabel('Date')
+plt.xticks(rotation=45)
+plt.ylabel('Price ($)')
+plt.title('GOOG Stock Price (5-years)')
+plt.grid(True)
+plt.show()
+
+# the below data analysis is from the medium website listed
+# Extract the 'Close' column from the data, we are getting the close price
+close_prices = data['Close']
+
+# Get the values from the 'Close' converted to array, we convert them to an array to be able to use them in computations
+values = close_prices.values
+
+# Calculate the length of the training data by taking 80% of the total length of the 'values' array
+training_data_len = math.ceil(len(values) * 0.8)
+
+# Create a MinMaxScaler object to have the totals in between a number of 0 and 1
+scaler = MinMaxScaler(feature_range=(0, 1))
+scaled_data = scaler.fit_transform(values.reshape(-1, 1))
+
+# Split the scaled data into training and test sets
+train_data = scaled_data[0: training_data_len, :]
+test_data = scaled_data[training_data_len - 60: , : ]
+
+# Initialize empty lists for the training and test inputs and outputs
+xTrain, yTrain = [], []
+xTest, yTest = [], [] # Initialize yTest as a list
+
+# Loop through the training data and create input/output pairs
+for i in range(60, len(train_data)):
+    xTrain.append(train_data[i - 60: i, 0])
+    yTrain.append(train_data[i, 0])
+
+# Convert the training inputs and outputs to arrays
+xTrain = np.array(xTrain)
+yTrain = np.array(yTrain)
+
+# Reshape the training inputs to be 3D for use with an LSTM model
+xTrain = np.reshape(xTrain, (xTrain.shape[0], xTrain.shape[1], 1))
+
+# Loop through the test data and create input sequences
+for i in range(60, len(test_data)):
+    xTest.append(test_data[i - 60: i, 0])
+    yTest.append(test_data[i, 0]) # Append to yTest as a list
+
+# Convert the test inputs to an array and reshape to be 3D
+xTest = np.array(xTest)
+x_test = np.reshape(xTest, (xTest.shape[0], xTest.shape[1], 1))
+
+# Convert to PyTorch tensors
+xTrain_tensor = torch.from_numpy(xTrain).float()
+yTrain_tensor = torch.from_numpy(yTrain).float()
+xTest_tensor = torch.from_numpy(xTest).float()
+yTest_tensor = torch.from_numpy(np.array(yTest)).float() # Convert yTest list to NumPy array before creating tensor
+
+# Create DataLoader for training and testing
+train_dataset = TensorDataset(xTrain_tensor, yTrain_tensor)
+test_dataset = TensorDataset(xTest_tensor, yTest_tensor)
+
+
+# model building
+class LSTMModel(nn.Module):
+    def __init__(self, input_size, hidden_size, output_size):
+        super(LSTMModel, self).__init__()
+        self.hidden_size = hidden_size
+
+        # LSTM models
+        self.lstm1 = nn.LSTM(input_size, hidden_size, batch_first=True)
+
+        # fully-connected models, is our outputs
+        self.fc1 = nn.Linear(hidden_size, 25)
+        self.fc2 = nn.Linear(25, output_size)
+
+    def forward(self, x):
+        # Initialize hidden and cell states with correct dimensions (3D)
+        hiddenState = torch.zeros(1, x.size(0), self.hidden_size).to(x.device)
+        cellState = torch.zeros(1, x.size(0), self.hidden_size).to(x.device)
+
+        out, _ = self.lstm1(x, (hiddenState, cellState))
+        out = self.fc1(out[:, -1, :])
+        out = self.fc2(out)
+        return out
+
+# Define model, loss function, and optimizer
+input_size = 1  # Number of features
+hidden_size = 100  # Number of hidden units in each LSTM layer
+output_size = 1  # Output size
+
+LSTM = LSTMModel(input_size, hidden_size, output_size)
+criterion = nn.MSELoss()  # Mean Squared Error loss function
+optimizer = optim.Adam(LSTM.parameters(), lr=0.001)
+batchsize = 64
+train_loader = DataLoader(train_dataset, batch_size=batchsize, shuffle=True)
+test_loader = DataLoader(test_dataset, batch_size=batchsize, shuffle=False)
+
+# model building
+class RNNModel(nn.Module):
+    def __init__(self, input_size, hidden_size, output_size):
+        super(RNNModel, self).__init__()
+        self.hidden_size = hidden_size
+
+        # RNN layers
+        self.rnn = nn.RNN(input_size, hidden_size, num_layers, batch_first=True)
+
+        # fully-connected models, is our outputs
+        self.fc1 = nn.Linear(hidden_size, 25)
+        self.fc2 = nn.Linear(25, output_size)
+
+    def forward(self, x):
+        # Initialize hidden and cell states with correct dimensions (3D)
+        hiddenState = torch.zeros(num_layers, x.size(0), self.hidden_size).to(x.device)
+
+        out, _ = self.rnn(x, hiddenState)
+        out = self.fc1(out[:, -1, :])
+        out = self.fc2(out)
+        return out
+
+# Define model, loss function, and optimizer
+input_size = 1  # Number of features
+hidden_size = 100  # Number of hidden units in each rnn layer
+output_size = 1  # Output size
+num_layers = 1  # Number of RNN layers
+
+rnn = RNNModel(input_size, hidden_size, output_size)
+criterion = nn.MSELoss()  # Mean Squared Error loss function
+optimizer = optim.Adam(rnn.parameters(), lr=0.001)
+batchsize = 64
+train_loader = DataLoader(train_dataset, batch_size=batchsize, shuffle=True)
+test_loader = DataLoader(test_dataset, batch_size=batchsize, shuffle=False)
+
+# testing and evaluvating the LSTM model
+num_epochs = 20
+for epoch in range(num_epochs):
+    LSTM.train()
+    running_loss = 0.0
+    for i, (inputs, labels) in enumerate(train_loader):
+        inputs = inputs.view(inputs.size(0), -1, 1)
+        optimizer.zero_grad()
+        outputs = LSTM(inputs)
+        loss = criterion(outputs, labels.view(-1, 1))
+        loss.backward()
+        optimizer.step()
+        running_loss += loss.item()
+    print(f'Epoch {epoch+1}/{num_epochs}, Loss: {running_loss / len(train_loader)}')
+
+LSTM.eval()
+total = 0
+accuracy = 0.0
+with torch.no_grad():
+    for inputs, labels in test_loader:
+        inputs = inputs.view(inputs.size(0), -1, 1)
+        outputs = rnn(inputs)
+        loss = criterion(outputs, labels.view(-1, 1))
+        total += labels.size(0)
+        accuracy += (1 - torch.abs(outputs - labels.view(-1, 1)).sum().item() / total)
+
+accuracy = accuracy / len(test_loader)  # Average accuracy across all batches
+print(f"Accuracy: % {accuracy * 100:.2f}")
+
+
+# testing and evaluvating the RNN model
+num_epochs = 20
+for epoch in range(num_epochs):
+    rnn.train()
+    running_loss = 0.0
+    for i, (inputs, labels) in enumerate(train_loader):
+        inputs = inputs.view(inputs.size(0), -1, 1)
+        optimizer.zero_grad()
+        outputs = rnn(inputs)
+        loss = criterion(outputs, labels.view(-1, 1))
+        loss.backward()
+        optimizer.step()
+        running_loss += loss.item()
+    print(f'Epoch {epoch+1}/{num_epochs}, Loss: {running_loss / len(train_loader)}')
+
+rnn.eval()
+total = 0
+accuracy = 0.0
+with torch.no_grad():
+    for inputs, labels in test_loader:
+        inputs = inputs.view(inputs.size(0), -1, 1)
+        outputs = rnn(inputs)
+        loss = criterion(outputs, labels.view(-1, 1))
+        total += labels.size(0)
+        accuracy += (1 - torch.abs(outputs - labels.view(-1, 1)).sum().item() / total)
+
+accuracy = accuracy / len(test_loader)  # Average accuracy across all batches
+print(f"Accuracy: % {accuracy * 100:.2f}")
+
+# Evaluating the model and collecting predictions
+LSTM.eval()
+actuals = []
+predictions = []
+with torch.no_grad():
+    for inputs, labels in test_loader:
+        inputs = inputs.view(inputs.size(0), -1, 1)
+        outputs = LSTM(inputs)
+        actuals.append(labels.view(-1, 1).cpu())
+        predictions.append(outputs.cpu())
+
+# Flatten the lists
+actuals = torch.cat(actuals).numpy()
+predictions = torch.cat(predictions).numpy()
+
+# Convert dates to a format matplotlib can understand
+data = y.download('GOOG', start='2022-12-31', end='2024-06-19')
+
+# Extract the dates for plotting and ensure they align with your predictions
+dates = data.index  # Assuming 'data' is a Pandas DataFrame with a DatetimeIndex
+
+# Plotting actual vs predicted values with dates
+plt.figure(figsize=(10, 5))
+
+# Use the dates that correspond to your predictions
+plt.plot(dates[:len(actuals)], actuals, label='Actual')  # Adjust the x-axis to match the length of 'actuals'
+plt.plot(dates[:len(predictions)], predictions, label='Predicted')  # Adjust the x-axis to match the length of 'predictions'
+
+plt.xlabel('Date')
+plt.ylabel('Values')
+plt.title('Actual vs Predicted Values')
+plt.legend()
+plt.xticks(rotation=45)
+plt.tight_layout()
+plt.show()
+
+# Evaluating the model and collecting predictions
+rnn.eval()
+actuals = []
+predictions = []
+with torch.no_grad():
+    for inputs, labels in test_loader:
+        inputs = inputs.view(inputs.size(0), -1, 1)
+        outputs = rnn(inputs)
+        actuals.append(labels.view(-1, 1).cpu())
+        predictions.append(outputs.cpu())
+
+# Flatten the lists
+actuals = torch.cat(actuals).numpy()
+predictions = torch.cat(predictions).numpy()
+
+# Convert dates to a format matplotlib can understand
+data = y.download('GOOG', start='2022-12-31', end='2024-06-19')
+
+# Extract the dates for plotting and ensure they align with your predictions
+dates = data.index  # Assuming 'data' is a Pandas DataFrame with a DatetimeIndex
+
+# Plotting actual vs predicted values with dates
+plt.figure(figsize=(10, 5))
+
+# Use the dates that correspond to your predictions
+plt.plot(dates[:len(actuals)], actuals, label='Actual')  # Adjust the x-axis to match the length of 'actuals'
+plt.plot(dates[:len(predictions)], predictions, label='Predicted')  # Adjust the x-axis to match the length of 'predictions'
+
+plt.xlabel('Date')
+plt.ylabel('Values')
+plt.title('Actual vs Predicted Values')
+plt.legend()
+plt.xticks(rotation=45)
+plt.tight_layout()
+plt.show()
+
